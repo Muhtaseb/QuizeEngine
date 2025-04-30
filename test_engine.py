@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import time
 from datetime import datetime, timedelta
+import base64
 
 # Set page configuration
 st.set_page_config(page_title="PMP Practice Exam", layout="wide")
@@ -39,14 +40,26 @@ if 'current_question_start_time' not in st.session_state:
     st.session_state.current_question_start_time = None
 if 'selected_test' not in st.session_state:
     st.session_state.selected_test = None
+if 'show_answer' not in st.session_state:
+    st.session_state.show_answer = {}
+if 'answered_questions' not in st.session_state:
+    st.session_state.answered_questions = set()
 
-# Handle page navigation logic
-def start_quiz():
+# Create callback functions for buttons
+def handle_start_quiz():
     st.session_state.page = "quiz"
     st.session_state.start_time = time.time()
     st.session_state.current_question_start_time = time.time()
 
-def next_question(question_row, user_answer):
+def handle_next_question():
+    # Get the current question data
+    data = load_data()
+    test_data = data[st.session_state.selected_test]
+    question_row = test_data.iloc[st.session_state.current_question]
+    
+    # Get user answer from session state
+    user_answer = st.session_state[f"q{st.session_state.current_question}"]
+    
     # Save time for current question
     question_time = time.time() - st.session_state.current_question_start_time
     st.session_state.question_times[st.session_state.current_question] = question_time
@@ -67,15 +80,17 @@ def next_question(question_row, user_answer):
             st.session_state.score += 1
     
     # Move to next question or finish
-    data = load_data()
-    test_data = data[st.session_state.selected_test]
     st.session_state.current_question += 1
+    # Reset show_answer for the next question
+    if st.session_state.current_question not in st.session_state.show_answer:
+        st.session_state.show_answer[st.session_state.current_question] = False
+    
     if st.session_state.current_question >= len(test_data):
         st.session_state.page = "results"
     else:
         st.session_state.current_question_start_time = time.time()
 
-def prev_question():
+def handle_prev_question():
     # Save time for current question
     question_time = time.time() - st.session_state.current_question_start_time
     st.session_state.question_times[st.session_state.current_question] = question_time
@@ -84,7 +99,7 @@ def prev_question():
     st.session_state.current_question -= 1
     st.session_state.current_question_start_time = time.time()
 
-def restart_quiz():
+def handle_restart_quiz():
     st.session_state.page = "intro"
     st.session_state.current_question = 0
     st.session_state.score = 0
@@ -92,6 +107,26 @@ def restart_quiz():
     st.session_state.question_times = {}
     st.session_state.start_time = None
     st.session_state.current_question_start_time = None
+    st.session_state.show_answer = {}
+    st.session_state.answered_questions = set()
+
+def handle_show_answer():
+    # Mark this question as answered
+    st.session_state.answered_questions.add(st.session_state.current_question)
+    # Show the answer
+    st.session_state.show_answer[st.session_state.current_question] = True
+
+# Add an auto-refresh component
+def autorefresh_component():
+    # Create JavaScript to reload the page
+    js_code = """
+    <script>
+    if (window.top.location.pathname === '/') {
+        window.parent.location.reload();
+    }
+    </script>
+    """
+    st.components.v1.html(js_code, height=0)
 
 # INTRODUCTION PAGE
 if st.session_state.page == "intro":
@@ -112,11 +147,11 @@ if st.session_state.page == "intro":
         st.write("1. Select the appropriate answer for each question.")
         st.write("2. Use the Next and Previous buttons to navigate through the quiz.")
     with col2:
-        st.write("3. Your score and time will be shown at the end of the quiz.")
-        st.write("4. Click 'Start Quiz' when you're ready to begin.")
-        # Add the start button to the instruction section
-        if st.button("Start Quiz", type="primary", key="start_btn"):
-            start_quiz()
+        st.write("3. Click 'Answer' to see the correct answer.")
+        st.write("4. You can only proceed to the next question after viewing the answer.")
+        
+    # Add the start button to the instruction section
+    st.button("Start Quiz", type="primary", key="start_btn", on_click=handle_start_quiz)
 
 # QUIZ PAGE
 elif st.session_state.page == "quiz":
@@ -147,19 +182,44 @@ elif st.session_state.page == "quiz":
         
         # Answer options
         options = [question_row['Option A'], question_row['Option B'], question_row['Option C'], question_row['Option D']]
-        user_answer = st.radio("Select your answer:", options, key=f"q{st.session_state.current_question}")
+        st.radio("Select your answer:", options, key=f"q{st.session_state.current_question}")
+        
+        # Get correct answer for display
+        correct_key = question_row['Key']
+        correct_option = question_row[f'Option {correct_key}']
+        
+        # Show answer button and feedback
+        answer_col, feedback_col = st.columns([1, 3])
+        with answer_col:
+            st.button("Show Answer", key=f"answer_btn_{st.session_state.current_question}", 
+                     on_click=handle_show_answer)
+            
+        with feedback_col:
+            # Check if we should show the answer
+            if st.session_state.current_question in st.session_state.answered_questions:
+                user_answer = st.session_state.get(f"q{st.session_state.current_question}")
+                is_correct = user_answer == correct_option
+                
+                if is_correct:
+                    st.success(f"✓ Correct! The answer is: {correct_key}) {correct_option}")
+                else:
+                    st.error(f"✗ Incorrect. The correct answer is: {correct_key}) {correct_option}")
+                
+                # Explanation if available
+                if 'Explanation' in question_row and pd.notna(question_row['Explanation']):
+                    st.info(f"Explanation: {question_row['Explanation']}")
         
         # Navigation buttons
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns([1, 1, 1])
         with col1:
             prev_disabled = st.session_state.current_question == 0
-            if st.button("Previous", disabled=prev_disabled, key="prev_btn"):
-                prev_question()
+            st.button("Previous", disabled=prev_disabled, key="prev_btn", on_click=handle_prev_question)
         
-        with col2:
+        with col3:
             next_label = "Next" if st.session_state.current_question < len(test_data) - 1 else "Finish Quiz"
-            if st.button(next_label, key="next_btn"):
-                next_question(question_row, user_answer)
+            # Only enable Next button if answer has been shown
+            next_disabled = st.session_state.current_question not in st.session_state.answered_questions
+            st.button(next_label, key="next_btn", on_click=handle_next_question, disabled=next_disabled)
 
 # RESULTS PAGE
 elif st.session_state.page == "results":
@@ -180,7 +240,4 @@ elif st.session_state.page == "results":
     st.info(f"Average time per question: {format_time(avg_time)}")
     
     # Restart button
-    if st.button("Restart Quiz", key="restart_btn"):
-        restart_quiz()
-        st.write('<script>window.parent.location.reload()</script>', unsafe_allow_html=True) 
-   
+    st.button("Restart Quiz", key="restart_btn", on_click=handle_restart_quiz) 
