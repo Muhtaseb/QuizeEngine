@@ -117,7 +117,6 @@ if st.session_state.page == "intro":
         # Add the start button to the instruction section
         if st.button("Start Quiz", type="primary", key="start_btn"):
             start_quiz()
-            st.rerun()
 
 # QUIZ PAGE
 elif st.session_state.page == "quiz":
@@ -156,18 +155,11 @@ elif st.session_state.page == "quiz":
             prev_disabled = st.session_state.current_question == 0
             if st.button("Previous", disabled=prev_disabled, key="prev_btn"):
                 prev_question()
-                st.rerun()
         
         with col2:
             next_label = "Next" if st.session_state.current_question < len(test_data) - 1 else "Finish Quiz"
             if st.button(next_label, key="next_btn"):
                 next_question(question_row, user_answer)
-                st.rerun()
-        
-        # Timer refresh
-        placeholder = st.empty()
-        time.sleep(0.9)
-        st.rerun()
 
 # RESULTS PAGE
 elif st.session_state.page == "results":
@@ -190,5 +182,5 @@ elif st.session_state.page == "results":
     # Restart button
     if st.button("Restart Quiz", key="restart_btn"):
         restart_quiz()
-        st.rerun() 
+        st.write('<script>window.parent.location.reload()</script>', unsafe_allow_html=True) 
    
