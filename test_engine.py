@@ -67,7 +67,8 @@ def load_data():
         "Core 260": "Core 260",
         "25 Q1 2023": "25 Q1 2023",
         "25 Q4 2022": "25 Q4 2022",
-        "55 Q2 2021": "55 Q2 2021"
+        "55 Q2 2021": "55 Q2 2021",
+        "Test": "Test"
     }
     return {name: pd.read_excel(excel_file, sheet_name=sheet) for name, sheet in sheets.items()}
 
@@ -98,6 +99,8 @@ if 'answered_questions' not in st.session_state:
     st.session_state.answered_questions = set()
 if 'multi_select_answers' not in st.session_state:
     st.session_state.multi_select_answers = {}
+if 'total_quiz_time' not in st.session_state:
+    st.session_state.total_quiz_time = None
 
 # Create callback functions for buttons
 def handle_start_quiz():
@@ -111,6 +114,17 @@ def handle_next_question():
     st.session_state.question_times[st.session_state.current_question] = question_time
     
     # Move to next question or finish
+    data = load_data()
+    test_data = data[st.session_state.selected_test]
+    
+    # Safety check - make sure we don't go past the last question
+    if st.session_state.current_question >= len(test_data) - 1:
+        st.session_state.current_question = len(test_data) - 1
+        # Save the total quiz time when finishing
+        st.session_state.total_quiz_time = time.time() - st.session_state.start_time
+        st.session_state.page = "results"
+        return
+        
     st.session_state.current_question += 1
     
     # Reset show_answer for the next question
@@ -118,9 +132,9 @@ def handle_next_question():
         st.session_state.show_answer[st.session_state.current_question] = False
     
     # Check if we need to go to results page
-    data = load_data()
-    test_data = data[st.session_state.selected_test]
     if st.session_state.current_question >= len(test_data):
+        # Save the total quiz time when finishing
+        st.session_state.total_quiz_time = time.time() - st.session_state.start_time
         st.session_state.page = "results"
     else:
         st.session_state.current_question_start_time = time.time()
@@ -145,6 +159,7 @@ def handle_restart_quiz():
     st.session_state.show_answer = {}
     st.session_state.answered_questions = set()
     st.session_state.multi_select_answers = {}
+    st.session_state.total_quiz_time = None
 
 def handle_show_answer():
     # Mark this question as answered
@@ -208,8 +223,13 @@ def handle_show_answer():
 
 # Function to handle multi-select changes
 def update_multi_select():
-    selected_options = st.session_state[f"multi_q{st.session_state.current_question}"]
-    st.session_state.multi_select_answers[st.session_state.current_question] = selected_options
+    key = f"multi_q{st.session_state.current_question}"
+    if key in st.session_state:
+        selected_options = st.session_state[key]
+        st.session_state.multi_select_answers[st.session_state.current_question] = selected_options
+    else:
+        # If the key doesn't exist yet, initialize with empty list
+        st.session_state.multi_select_answers[st.session_state.current_question] = []
 
 # Function to calculate time elapsed
 def get_elapsed_time():
@@ -299,17 +319,24 @@ elif st.session_state.page == "quiz":
         if has_multiple_answers:
             # For multiple answers, use multi-select checkbox
             st.write("**Select all that apply:**")
-            selected = st.multiselect(
-                "Choose all correct answers:", 
-                options, 
-                key=f"multi_q{st.session_state.current_question}",
-                on_change=update_multi_select,
-                default=st.session_state.multi_select_answers.get(st.session_state.current_question, [])
-            )
+            try:
+                selected = st.multiselect(
+                    "Choose all correct answers:", 
+                    options, 
+                    key=f"multi_q{st.session_state.current_question}",
+                    on_change=update_multi_select,
+                    default=st.session_state.multi_select_answers.get(st.session_state.current_question, [])
+                )
+            except Exception as e:
+                st.error(f"Error loading multiple choice options. Please try restarting the quiz.")
+                st.session_state.multi_select_answers[st.session_state.current_question] = []
         else:
             # For single answer, use radio button
-            st.radio("Select your answer:", options, key=f"q{st.session_state.current_question}")
-        
+            try:
+                st.radio("Select your answer:", options, key=f"q{st.session_state.current_question}")
+            except Exception as e:
+                st.error(f"Error loading answer options. Please try restarting the quiz.")
+                
         # Create a single row of buttons for navigation and showing answers
         button_cols = st.columns([1, 1, 1, 2])  # Adding an extra column for spacing
         
@@ -424,8 +451,12 @@ elif st.session_state.page == "results":
     
     st.title("Quiz Results")
     
-    # Calculate total time
-    total_time = time.time() - st.session_state.start_time
+    # Use the stored total time instead of recalculating
+    if st.session_state.total_quiz_time is None:
+        # If somehow we got here without setting the total time, calculate it
+        st.session_state.total_quiz_time = time.time() - st.session_state.start_time
+    
+    total_time = st.session_state.total_quiz_time
     
     # Display results
     st.success(f"Your score: {st.session_state.score}/{len(test_data)} ({int(st.session_state.score/len(test_data)*100)}%)")
