@@ -44,6 +44,8 @@ if 'show_answer' not in st.session_state:
     st.session_state.show_answer = {}
 if 'answered_questions' not in st.session_state:
     st.session_state.answered_questions = set()
+if 'multi_select_answers' not in st.session_state:
+    st.session_state.multi_select_answers = {}
 
 # Create callback functions for buttons
 def handle_start_quiz():
@@ -52,39 +54,20 @@ def handle_start_quiz():
     st.session_state.current_question_start_time = time.time()
 
 def handle_next_question():
-    # Get the current question data
-    data = load_data()
-    test_data = data[st.session_state.selected_test]
-    question_row = test_data.iloc[st.session_state.current_question]
-    
-    # Get user answer from session state
-    user_answer = st.session_state[f"q{st.session_state.current_question}"]
-    
     # Save time for current question
     question_time = time.time() - st.session_state.current_question_start_time
     st.session_state.question_times[st.session_state.current_question] = question_time
     
-    # Check answer
-    correct_answer = question_row['Key']
-    option_map = {
-        'A': question_row['Option A'],
-        'B': question_row['Option B'],
-        'C': question_row['Option C'],
-        'D': question_row['Option D']
-    }
-    
-    # Save answer and update score
-    st.session_state.answers[st.session_state.current_question] = user_answer
-    if user_answer == option_map.get(correct_answer):
-        if st.session_state.current_question not in st.session_state.question_times or st.session_state.question_times.get(st.session_state.current_question) == 0:
-            st.session_state.score += 1
-    
     # Move to next question or finish
     st.session_state.current_question += 1
+    
     # Reset show_answer for the next question
     if st.session_state.current_question not in st.session_state.show_answer:
         st.session_state.show_answer[st.session_state.current_question] = False
     
+    # Check if we need to go to results page
+    data = load_data()
+    test_data = data[st.session_state.selected_test]
     if st.session_state.current_question >= len(test_data):
         st.session_state.page = "results"
     else:
@@ -109,12 +92,71 @@ def handle_restart_quiz():
     st.session_state.current_question_start_time = None
     st.session_state.show_answer = {}
     st.session_state.answered_questions = set()
+    st.session_state.multi_select_answers = {}
 
 def handle_show_answer():
     # Mark this question as answered
     st.session_state.answered_questions.add(st.session_state.current_question)
     # Show the answer
     st.session_state.show_answer[st.session_state.current_question] = True
+    
+    # Score the question if not already scored
+    if st.session_state.current_question not in st.session_state.answers:
+        # Get current question data
+        data = load_data()
+        test_data = data[st.session_state.selected_test]
+        question_row = test_data.iloc[st.session_state.current_question]
+        
+        # Check if this is a multiple-answer question
+        correct_keys = str(question_row['Key']).split(',')
+        correct_keys = [key.strip() for key in correct_keys]
+        
+        if len(correct_keys) > 1:
+            # Multiple correct answers
+            user_selections = st.session_state.multi_select_answers.get(st.session_state.current_question, [])
+            
+            # Map selected options back to keys
+            option_to_key = {}
+            for key in ['A', 'B', 'C', 'D', 'E']:
+                if f'Option {key}' in question_row and pd.notna(question_row[f'Option {key}']):
+                    option_to_key[question_row[f'Option {key}']] = key
+            
+            user_selection_keys = []
+            for selection in user_selections:
+                key = option_to_key.get(selection)
+                if key:
+                    user_selection_keys.append(key)
+            
+            # Sort both lists for comparison
+            user_selection_keys.sort()
+            sorted_correct_keys = sorted(correct_keys)
+            
+            # Check if correct and update score
+            is_correct = user_selection_keys == sorted_correct_keys
+            if is_correct:
+                st.session_state.score += 1
+        else:
+            # Single correct answer
+            user_answer = st.session_state.get(f"q{st.session_state.current_question}")
+            correct_key = correct_keys[0]
+            
+            # Check if the correct option column exists
+            option_col = f'Option {correct_key}'
+            if option_col in question_row and pd.notna(question_row[option_col]):
+                correct_option = question_row[option_col]
+                
+                # Check if correct and update score
+                is_correct = user_answer == correct_option
+                if is_correct:
+                    st.session_state.score += 1
+        
+        # Mark that we've scored this question
+        st.session_state.answers[st.session_state.current_question] = True
+
+# Function to handle multi-select changes
+def update_multi_select():
+    selected_options = st.session_state[f"multi_q{st.session_state.current_question}"]
+    st.session_state.multi_select_answers[st.session_state.current_question] = selected_options
 
 # Add an auto-refresh component
 def autorefresh_component():
@@ -144,11 +186,12 @@ if st.session_state.page == "intro":
     st.subheader("Instructions:")
     col1, col2 = st.columns(2)
     with col1:
-        st.write("1. Select the appropriate answer for each question.")
+        st.write("1. Select the appropriate answer(s) for each question.")
         st.write("2. Use the Next and Previous buttons to navigate through the quiz.")
     with col2:
-        st.write("3. Click 'Answer' to see the correct answer.")
-        st.write("4. You can only proceed to the next question after viewing the answer.")
+        st.write("3. Click 'Show Answer' to see the correct answer.")
+        st.write("4. Some questions may have multiple correct answers.")
+        st.write("5. You can only proceed to the next question after viewing the answer.")
         
     # Add the start button to the instruction section
     st.button("Start Quiz", type="primary", key="start_btn", on_click=handle_start_quiz)
@@ -180,13 +223,29 @@ elif st.session_state.page == "quiz":
             question_time = time.time() - st.session_state.current_question_start_time
             st.info(f"Time on question: {format_time(question_time)}")
         
-        # Answer options
-        options = [question_row['Option A'], question_row['Option B'], question_row['Option C'], question_row['Option D']]
-        st.radio("Select your answer:", options, key=f"q{st.session_state.current_question}")
+        # Check if this is a multiple-answer question
+        has_multiple_answers = ',' in str(question_row['Key'])
         
-        # Get correct answer for display
-        correct_key = question_row['Key']
-        correct_option = question_row[f'Option {correct_key}']
+        # Get available options (check for Option E)
+        options = []
+        for key in ['A', 'B', 'C', 'D', 'E']:
+            option_col = f'Option {key}'
+            if option_col in question_row and pd.notna(question_row[option_col]):
+                options.append(question_row[option_col])
+        
+        if has_multiple_answers:
+            # For multiple answers, use multi-select checkbox
+            st.write("**Select all that apply:**")
+            selected = st.multiselect(
+                "Choose all correct answers:", 
+                options, 
+                key=f"multi_q{st.session_state.current_question}",
+                on_change=update_multi_select,
+                default=st.session_state.multi_select_answers.get(st.session_state.current_question, [])
+            )
+        else:
+            # For single answer, use radio button
+            st.radio("Select your answer:", options, key=f"q{st.session_state.current_question}")
         
         # Show answer button and feedback
         answer_col, feedback_col = st.columns([1, 3])
@@ -197,17 +256,75 @@ elif st.session_state.page == "quiz":
         with feedback_col:
             # Check if we should show the answer
             if st.session_state.current_question in st.session_state.answered_questions:
-                user_answer = st.session_state.get(f"q{st.session_state.current_question}")
-                is_correct = user_answer == correct_option
+                # Get correct answer keys (split by comma if multiple)
+                correct_keys = str(question_row['Key']).split(',')
+                correct_keys = [key.strip() for key in correct_keys]
                 
-                if is_correct:
-                    st.success(f"✓ Correct! The answer is: {correct_key}) {correct_option}")
+                if has_multiple_answers:
+                    # Multiple correct answers
+                    user_selections = st.session_state.multi_select_answers.get(st.session_state.current_question, [])
+                    
+                    # Map selected options back to keys
+                    option_to_key = {}
+                    for key in ['A', 'B', 'C', 'D', 'E']:
+                        option_col = f'Option {key}'
+                        if option_col in question_row and pd.notna(question_row[option_col]):
+                            option_to_key[question_row[option_col]] = key
+                    
+                    user_selection_keys = []
+                    for selection in user_selections:
+                        key = option_to_key.get(selection)
+                        if key:
+                            user_selection_keys.append(key)
+                    
+                    # Sort both lists for comparison
+                    user_selection_keys.sort()
+                    sorted_correct_keys = sorted(correct_keys)
+                    
+                    is_correct = user_selection_keys == sorted_correct_keys
+                    
+                    # Get correct answer text
+                    correct_answers_text = []
+                    for key in correct_keys:
+                        if f'Option {key}' in question_row and pd.notna(question_row[f'Option {key}']):
+                            option_text = question_row[f'Option {key}']
+                            correct_answers_text.append(f"{key}) {option_text}")
+                    
+                    correct_display = ", ".join(correct_answers_text)
+                    
+                    if is_correct:
+                        st.success(f"✓ Correct! The answers are: {correct_display}")
+                    else:
+                        st.error(f"✗ Incorrect. The correct answers are: {correct_display}")
                 else:
-                    st.error(f"✗ Incorrect. The correct answer is: {correct_key}) {correct_option}")
+                    # Single correct answer
+                    user_answer = st.session_state.get(f"q{st.session_state.current_question}")
+                    correct_key = correct_keys[0]
+                    
+                    # Check if the correct option column exists
+                    option_col = f'Option {correct_key}'
+                    if option_col in question_row and pd.notna(question_row[option_col]):
+                        correct_option = question_row[option_col]
+                        
+                        is_correct = user_answer == correct_option
+                        
+                        if is_correct:
+                            st.success(f"✓ Correct! The answer is: {correct_key}) {correct_option}")
+                        else:
+                            st.error(f"✗ Incorrect. The correct answer is: {correct_key}) {correct_option}")
                 
-                # Explanation if available
-                if 'Explanation' in question_row and pd.notna(question_row['Explanation']):
-                    st.info(f"Explanation: {question_row['Explanation']}")
+                # Show feedback/explanation section with better formatting
+                st.markdown("---")
+                st.subheader("Explanation:")
+                
+                # Check for Feedback column first
+                if 'Feedback' in question_row and pd.notna(question_row['Feedback']):
+                    st.write(question_row['Feedback'])
+                # Then check for Explanation as fallback
+                elif 'Explanation' in question_row and pd.notna(question_row['Explanation']):
+                    st.write(question_row['Explanation'])
+                else:
+                    st.write("No explanation provided for this question.")
         
         # Navigation buttons
         col1, col2, col3 = st.columns([1, 1, 1])
