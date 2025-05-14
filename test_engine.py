@@ -6,6 +6,7 @@ import base64
 from PIL import Image
 import os
 import io
+import random
 from streamlit_autorefresh import st_autorefresh
 
 # Set page configuration - MUST be the first Streamlit command
@@ -101,12 +102,21 @@ if 'multi_select_answers' not in st.session_state:
     st.session_state.multi_select_answers = {}
 if 'total_quiz_time' not in st.session_state:
     st.session_state.total_quiz_time = None
+if 'randomized_questions' not in st.session_state:
+    st.session_state.randomized_questions = []
 
 # Create callback functions for buttons
 def handle_start_quiz():
     st.session_state.page = "quiz"
     st.session_state.start_time = time.time()
     st.session_state.current_question_start_time = time.time()
+    
+    # Create a randomized list of question indices
+    data = load_data()
+    test_data = data[st.session_state.selected_test]
+    num_questions = len(test_data)
+    st.session_state.randomized_questions = list(range(num_questions))
+    random.shuffle(st.session_state.randomized_questions)
 
 def handle_next_question():
     # Save time for current question
@@ -285,13 +295,16 @@ elif st.session_state.page == "quiz":
     
     # Display current question
     if st.session_state.current_question < len(test_data):
-        question_row = test_data.iloc[st.session_state.current_question]
-        question_num = st.session_state.current_question + 1
+        # Get the question index from the randomized list
+        question_index = st.session_state.randomized_questions[st.session_state.current_question]
+        question_row = test_data.iloc[question_index]
+        question_num = question_index + 1  # Original question number (for images)
+        display_num = st.session_state.current_question + 1  # Display number (1-based index)
         
         # Question header with timer
         col_q, col_q_timer = st.columns([3, 1])
         with col_q:
-            st.subheader(f"Question {question_num} of {len(test_data)}")
+            st.subheader(f"Question {display_num} of {len(test_data)}")
             st.write(question_row['Question'])
             
             # Check for question image in the Pictures folder
@@ -299,7 +312,7 @@ elif st.session_state.page == "quiz":
             if image_path:
                 img_b64 = get_image_as_base64(image_path)
                 if img_b64:
-                    st.image(img_b64, caption=f"Question {question_num} Image")
+                    st.image(img_b64, caption=f"Question {display_num} Image")
                     
         with col_q_timer:
             question_time = get_question_time()
